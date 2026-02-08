@@ -14,6 +14,7 @@ import R3fForceGraph from 'r3f-forcegraph'
 import { DEFAULT_QUALITY_MODE, QUALITY_PRESETS } from './qualityPresets'
 
 const VIEWPORT_PADDING = 48
+const TEAM_PALETTE = ['#58b6ff', '#ff8a3d', '#59d19a', '#c4a2ff', '#ffd166', '#ff6e9f', '#40e1d0']
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2
@@ -21,6 +22,16 @@ function easeInOutCubic(t) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
+}
+
+function hashString(value) {
+  const str = String(value ?? '')
+  let hash = 0
+  for (let i = 0; i < str.length; i += 1) {
+    hash = (hash << 5) - hash + str.charCodeAt(i)
+    hash |= 0
+  }
+  return Math.abs(hash)
 }
 
 function getFocusedPositionedNodes(graphData, nodeIds) {
@@ -67,6 +78,32 @@ function computeBoundingSphereRadius(nodes, center) {
   return radius
 }
 
+function mergeGraphData(base, patch) {
+  const baseNodes = base?.nodes ?? []
+  const baseLinks = base?.links ?? []
+  const patchNodes = patch?.nodes ?? []
+  const patchLinks = patch?.links ?? []
+
+  const nodeMap = new Map(baseNodes.map((node) => [node.id, node]))
+  patchNodes.forEach((node) => nodeMap.set(node.id, { ...(nodeMap.get(node.id) ?? {}), ...node }))
+
+  const linkKey = (link) => {
+    const source = link.source?.id ?? link.source
+    const target = link.target?.id ?? link.target
+    return `${source}::${target}::${link.relation ?? ''}`
+  }
+
+  const linkMap = new Map(baseLinks.map((link) => [linkKey(link), link]))
+  patchLinks.forEach((link) =>
+    linkMap.set(linkKey(link), { ...(linkMap.get(linkKey(link)) ?? {}), ...link }),
+  )
+
+  return {
+    nodes: [...nodeMap.values()],
+    links: [...linkMap.values()],
+  }
+}
+
 function SceneTelemetry({ controlsRef, viewStateRef }) {
   const { camera, size } = useThree()
 
@@ -96,6 +133,8 @@ function GraphLayer({
   hoverTooltip,
   tooltipRenderer,
   dimInactive,
+  teamKey,
+  documentKey,
 }) {
   const fgRef = useRef(null)
   const animationRef = useRef(null)
@@ -298,9 +337,9 @@ function GraphLayer({
         nodeColor={(node) => {
           if (hoverNode && node === hoverNode) return '#ffffff'
           if (highlightNodes.size > 0 && highlightNodes.has(node)) return '#ffe082'
-          if (activeNodeIdSet.size > 0 && activeNodeIdSet.has(node.id)) return node.color ?? '#8ad4ff'
+          if (activeNodeIdSet.size > 0 && activeNodeIdSet.has(node.id)) return node.__displayColor
           if (activeNodeIdSet.size > 0 && dimInactive) return 'rgba(109, 120, 157, 0.42)'
-          return node.color ?? '#8ad4ff'
+          return node.__displayColor
         }}
         nodeOpacity={activeNodeIdSet.size > 0 ? 0.9 : 0.96}
         linkVisibility={(link) =>
@@ -380,6 +419,9 @@ function GraphLayer({
               <span style={{ color: '#bfd0ff', fontSize: '0.64rem', lineHeight: 1.1 }}>
                 {hoverNode.category}
               </span>
+              <span style={{ color: '#9db0e9', fontSize: '0.61rem', lineHeight: 1.1 }}>
+                {hoverNode[teamKey] ?? 'no-team'} · {hoverNode[documentKey] ?? 'no-doc'}
+              </span>
             </div>
           )}
         </Html>
@@ -402,6 +444,8 @@ function GraphScene({
   dimInactive,
   onNodeClick,
   onNodeHover,
+  teamKey,
+  documentKey,
 }) {
   const controlsRef = useRef(null)
 
@@ -441,6 +485,8 @@ function GraphScene({
         hoverTooltip={hoverTooltip}
         tooltipRenderer={tooltipRenderer}
         dimInactive={dimInactive}
+        teamKey={teamKey}
+        documentKey={documentKey}
       />
       <SceneTelemetry controlsRef={controlsRef} viewStateRef={viewStateRef} />
       <OrbitControls
@@ -488,10 +534,53 @@ function normalizeData(data) {
   return { nodes, links }
 }
 
+function buildTeamColorMap(nodes, teamKey, teamColors) {
+  const map = new Map()
+  nodes.forEach((node) => {
+    const teamId = node[teamKey]
+    if (!teamId || map.has(teamId)) return
+    map.set(teamId, teamColors?.[teamId] ?? TEAM_PALETTE[hashString(teamId) % TEAM_PALETTE.length])
+  })
+  return map
+}
+
+function scopeData(rawData, teamScope, hiddenTeamIds, showCrossTeamLinks, teamKey) {
+  const hidden = new Set(hiddenTeamIds ?? [])
+  const scopedTeams = teamScope ? new Set(teamScope) : null
+
+  const nodes = (rawData?.nodes ?? []).filter((node) => {
+    const teamId = node[teamKey]
+    if (hidden.has(teamId)) return false
+    if (!scopedTeams) return true
+    return scopedTeams.has(teamId)
+  })
+
+  const nodeIdSet = new Set(nodes.map((node) => node.id))
+  const nodeById = new Map(nodes.map((node) => [node.id, node]))
+
+  const links = (rawData?.links ?? []).filter((link) => {
+    const sourceId = link.source?.id ?? link.source
+    const targetId = link.target?.id ?? link.target
+    if (!nodeIdSet.has(sourceId) || !nodeIdSet.has(targetId)) return false
+    if (showCrossTeamLinks) return true
+    const sourceTeam = nodeById.get(sourceId)?.[teamKey]
+    const targetTeam = nodeById.get(targetId)?.[teamKey]
+    return sourceTeam === targetTeam
+  })
+
+  return { nodes, links }
+}
+
 export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
   {
     data,
     groups = [],
+    teamKey = 'teamId',
+    documentKey = 'documentId',
+    teamColors = {},
+    initialTeamScope = null,
+    hiddenTeamIds = [],
+    showCrossTeamLinks = true,
     className,
     style,
     qualityMode = DEFAULT_QUALITY_MODE,
@@ -509,9 +598,37 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
   },
   ref,
 ) {
-  const graphData = useMemo(() => normalizeData(data), [data])
+  const [rawData, setRawData] = useState(data)
   const viewStateRef = useRef(null)
   const groupsById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups])
+  const [teamScope, setTeamScope] = useState(initialTeamScope)
+
+  useEffect(() => {
+    setRawData(data)
+  }, [data])
+
+  useEffect(() => {
+    setTeamScope(initialTeamScope)
+  }, [initialTeamScope])
+
+  const filteredData = useMemo(
+    () => scopeData(rawData, teamScope, hiddenTeamIds, showCrossTeamLinks, teamKey),
+    [rawData, teamScope, hiddenTeamIds, showCrossTeamLinks, teamKey],
+  )
+
+  const teamColorMap = useMemo(
+    () => buildTeamColorMap(filteredData.nodes, teamKey, teamColors),
+    [filteredData.nodes, teamKey, teamColors],
+  )
+
+  const graphData = useMemo(() => {
+    const normalized = normalizeData(filteredData)
+    normalized.nodes.forEach((node) => {
+      const teamId = node[teamKey]
+      node.__displayColor = node.color ?? teamColorMap.get(teamId) ?? '#8ad4ff'
+    })
+    return normalized
+  }, [filteredData, teamKey, teamColorMap])
 
   const [qualityState, setQualityState] = useState(qualityMode)
   const [activeNodeIds, setActiveNodeIds] = useState([])
@@ -578,12 +695,80 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
     focusAll()
   }, [focusAll, focusGroup, focusOnNodes, initialFocus, graphData.nodes.length])
 
+  const focusTeam = useCallback(
+    (teamId) => {
+      const ids = graphData.nodes.filter((node) => node[teamKey] === teamId).map((node) => node.id)
+      if (!ids.length) return false
+      focusOnNodes(ids, 'area')
+      return true
+    },
+    [focusOnNodes, graphData.nodes, teamKey],
+  )
+
+  const focusDocument = useCallback(
+    (documentId) => {
+      const ids = graphData.nodes
+        .filter((node) => String(node[documentKey]) === String(documentId))
+        .map((node) => node.id)
+      if (!ids.length) return false
+      focusOnNodes(ids, 'default')
+      return true
+    },
+    [focusOnNodes, graphData.nodes, documentKey],
+  )
+
+  const search = useCallback(
+    (query, { limit = 25, focus = false } = {}) => {
+      const normalized = String(query ?? '').trim().toLowerCase()
+      if (!normalized) return []
+      const results = graphData.nodes.filter((node) => {
+        const blob = [
+          node.label,
+          node.category,
+          node.summary,
+          node[teamKey],
+          node[documentKey],
+          ...(node.tags ?? []),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+        return blob.includes(normalized)
+      })
+      const sliced = results.slice(0, limit)
+      if (focus && sliced.length) {
+        focusOnNodes(sliced.map((node) => node.id), 'search')
+      }
+      return sliced
+    },
+    [documentKey, focusOnNodes, graphData.nodes, teamKey],
+  )
+
   useImperativeHandle(
     ref,
     () => ({
       focusAll,
       focusNodes: (nodeIds) => focusOnNodes(nodeIds, 'default'),
       focusGroup,
+      focusTeam,
+      focusDocument,
+      search,
+      setTeamScope: (teamIds, { focus = true } = {}) => {
+        setTeamScope(teamIds?.length ? [...new Set(teamIds)] : null)
+        if (focus && teamIds?.length) {
+          const ids = graphData.nodes
+            .filter((node) => teamIds.includes(node[teamKey]))
+            .map((node) => node.id)
+          if (ids.length) focusOnNodes(ids, 'area')
+        }
+      },
+      clearTeamScope: ({ focus = true } = {}) => {
+        setTeamScope(null)
+        if (focus) focusAll()
+      },
+      upsertData: (patch) => {
+        setRawData((prev) => mergeGraphData(prev, patch))
+      },
       setQuality: (mode) => {
         if (QUALITY_PRESETS[mode]) {
           setQualityState(mode)
@@ -595,13 +780,31 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
         const view = viewStateRef.current
         return {
           quality: qualityState,
+          teamScope,
           activeNodeIds,
           focusNodeIds: focusRequest.nodeIds,
           view,
         }
       },
+      listTeams: () => [...new Set(graphData.nodes.map((node) => node[teamKey]).filter(Boolean))],
+      listDocuments: () =>
+        [...new Set(graphData.nodes.map((node) => node[documentKey]).filter(Boolean))],
     }),
-    [focusAll, focusOnNodes, focusGroup, qualityState, activeNodeIds, focusRequest.nodeIds],
+    [
+      activeNodeIds,
+      documentKey,
+      focusAll,
+      focusDocument,
+      focusGroup,
+      focusOnNodes,
+      focusRequest.nodeIds,
+      focusTeam,
+      graphData.nodes,
+      qualityState,
+      search,
+      teamKey,
+      teamScope,
+    ],
   )
 
   const handleNodeClick = useCallback(
@@ -631,6 +834,8 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
         dimInactive={dimInactive}
         onNodeClick={handleNodeClick}
         onNodeHover={onNodeHover}
+        teamKey={teamKey}
+        documentKey={documentKey}
       />
     </div>
   )

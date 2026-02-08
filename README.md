@@ -1,18 +1,16 @@
 # Knowledge Graph Node Framework
 
-Embeddable React framework for rendering and organizing interactive 3D knowledge-node groups inside any container on a webpage.
+Embeddable React framework for rendering and organizing 3D knowledge graphs inside any bounded UI region.
 
-This package is visual-only: no side panel UI is included.
+Built for product scenarios like AI course-generation SaaS with multi-team document ingestion and RAG-backed knowledge mapping.
 
-## Features
+## What It Solves
 
-- 3D force-directed node graph using `r3f-forcegraph`
-- Group-based focus API (`focusGroup`, `focusNodes`, `focusAll`)
-- Auto camera framing for selected node sets/groups
-- Click-to-focus neighborhood behavior
-- Optional in-scene hover tooltip
-- Runtime quality presets (`high`, `balanced`, `performance`)
-- Works in partial page regions (does not require full-window canvas)
+- Render a navigable knowledge graph in a card/panel (not full window required)
+- Handle multi-team knowledge nodes in one graph
+- Focus by team, document, or arbitrary node set
+- Support incremental ingestion updates without rebuilding the app
+- Keep performance tunable with runtime quality presets
 
 ## Install
 
@@ -20,70 +18,71 @@ This package is visual-only: no side panel UI is included.
 npm install knowledge-graph-node-framework react react-dom three @react-three/fiber @react-three/drei r3f-forcegraph
 ```
 
-## Basic Usage
+## Minimal Embed
 
 ```jsx
 import { useRef } from 'react'
 import { KnowledgeGraph } from 'knowledge-graph-node-framework'
 
-const data = {
-  nodes: [
-    { id: 'a', label: 'Node A', category: 'Topic', val: 10, color: '#58b6ff' },
-    { id: 'b', label: 'Node B', category: 'Topic', val: 8, color: '#ff8a3d' },
-    { id: 'c', label: 'Node C', category: 'Topic', val: 7, color: '#59d19a' },
-  ],
-  links: [
-    { source: 'a', target: 'b', strength: 2 },
-    { source: 'b', target: 'c', strength: 1 },
-  ],
-}
-
-const groups = [
-  { id: 'cluster-1', nodeIds: ['a', 'b'] },
-  { id: 'cluster-2', nodeIds: ['b', 'c'] },
-]
-
-export default function Example() {
+export default function KnowledgePanel({ graphData, groups }) {
   const graphRef = useRef(null)
 
   return (
-    <div style={{ width: 800, height: 500 }}>
+    <div style={{ width: '100%', height: 520 }}>
       <KnowledgeGraph
         ref={graphRef}
-        data={data}
+        data={graphData}
         groups={groups}
-        initialFocus={{ type: 'all' }}
         qualityMode="balanced"
-        autoFocusOnNodeClick
+        initialFocus={{ type: 'all' }}
       />
     </div>
   )
 }
 ```
 
-## Imperative API (via `ref`)
+## Data Model
 
-```js
-graphRef.current.focusAll()
-graphRef.current.focusNodes(['a', 'b'])
-graphRef.current.focusGroup('cluster-1')
-graphRef.current.setQuality('performance')
-const snapshot = graphRef.current.getSnapshot()
-```
+Node fields (recommended):
 
-## Component API
+- `id: string` (required)
+- `label?: string`
+- `category?: string`
+- `val?: number`
+- `color?: string`
+- `tags?: string[]`
+- `summary?: string`
+- `teamId?: string` (or custom key via `teamKey`)
+- `documentId?: string` (or custom key via `documentKey`)
 
-`KnowledgeGraph` props:
+Link fields (required):
+
+- `source: string`
+- `target: string`
+
+Optional link fields:
+
+- `strength?: number`
+- `relation?: string`
+- `color?: string`
+
+## Component Props
 
 - `data`: `{ nodes: Node[], links: Link[] }` (required)
 - `groups`: `{ id: string, nodeIds: string[] }[]`
+- `teamKey`: node field name for team ID (default `teamId`)
+- `documentKey`: node field name for document ID (default `documentId`)
+- `teamColors`: map of teamId -> color
+- `initialTeamScope`: `string[] | null`
+- `hiddenTeamIds`: `string[]`
+- `showCrossTeamLinks`: `boolean` (default `true`)
 - `qualityMode`: `'high' | 'balanced' | 'performance'`
-- `initialFocus`: `{ type: 'all' } | { type: 'group', groupId: string } | { type: 'nodes', nodeIds: string[] }`
+- `initialFocus`: `{ type: 'all' } | { type: 'group', groupId } | { type: 'nodes', nodeIds }`
 - `autoFocusOnNodeClick`: `boolean` (default `true`)
 - `dimInactive`: `boolean` (default `true`)
 - `hoverTooltip`: `boolean` (default `true`)
 - `tooltipRenderer(node)`: custom tooltip renderer
-- `background`: background color (default `#07122e`)
+- `background`: string (default `#07122e`)
 - `fog`: `{ near: number, far: number } | false`
 - `camera`: `{ position, fov, near, far, minDistance, maxDistance }`
 - `onNodeClick(node, event)`
@@ -91,16 +90,57 @@ const snapshot = graphRef.current.getSnapshot()
 - `onFocusChange({ type, nodeIds })`
 - `className`, `style`
 
-Node shape (minimum):
+## Imperative API (`ref`)
 
-- `id: string`
-- Optional: `label`, `category`, `val`, `color`, `summary`, `tags`
+- `focusAll()`
+- `focusNodes(nodeIds: string[])`
+- `focusGroup(groupId: string)`
+- `focusTeam(teamId: string)`
+- `focusDocument(documentId: string)`
+- `search(query: string, { limit = 25, focus = false })`
+- `setTeamScope(teamIds: string[], { focus = true })`
+- `clearTeamScope({ focus = true })`
+- `setQuality(mode: 'high' | 'balanced' | 'performance')`
+- `upsertData({ nodes?: Node[], links?: Link[] })`
+- `listTeams()`
+- `listDocuments()`
+- `getSnapshot()`
 
-Link shape (minimum):
+## SaaS Workflow Example (Teams + RAG)
 
-- `source: string`
-- `target: string`
-- Optional: `strength`, `color`, `relation`
+```jsx
+// During ingestion completion (streaming patch):
+graphRef.current.upsertData({
+  nodes: [
+    {
+      id: 'chunk-8844',
+      label: 'Gagne Nine Events Summary',
+      teamId: 'team-instructional-design',
+      documentId: 'doc-lxd-playbook',
+      tags: ['instructional design', 'pedagogy'],
+      val: 6,
+    },
+  ],
+  links: [
+    { source: 'chunk-8844', target: 'chunk-1011', relation: 'semantic-match', strength: 2 },
+  ],
+})
+
+// Filter graph to one team:
+graphRef.current.setTeamScope(['team-instructional-design'])
+
+// Focus all nodes from a selected source document:
+graphRef.current.focusDocument('doc-lxd-playbook')
+
+// Search and focus matches:
+const matches = graphRef.current.search('assessment rubric', { focus: true, limit: 30 })
+```
+
+## Quality Presets
+
+- `high`: richest visuals
+- `balanced`: good default for most apps
+- `performance`: lowest compute, strongest culling
 
 ## Development
 
@@ -111,4 +151,4 @@ npm run lint
 npm run build
 ```
 
-The demo app in `src/App.jsx` shows how to embed the framework in a bounded container with external controls.
+The demo in `src/App.jsx` shows an embedded graph with external controls, intended as integration reference.
