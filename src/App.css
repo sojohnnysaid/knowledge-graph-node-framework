@@ -19,11 +19,11 @@ body {
 .demo-page {
   width: 100%;
   min-height: 100vh;
-  padding: 1.1rem;
+  padding: 1rem;
 }
 
 .demo-card {
-  width: min(1200px, 100%);
+  width: min(1400px, 100%);
   margin: 0 auto;
   border: 1px solid rgba(123, 150, 255, 0.24);
   border-radius: 14px;
@@ -52,26 +52,70 @@ body {
 }
 
 .toolbar-actions button,
-.toolbar-actions select {
+.toolbar-actions select,
+.toolbar-actions input {
   border: 1px solid rgba(126, 151, 255, 0.34);
   background: rgba(37, 54, 119, 0.52);
   color: #e4ecff;
   border-radius: 9px;
-  padding: 0.34rem 0.54rem;
+  padding: 0.38rem 0.56rem;
   font-size: 0.78rem;
+}
+
+.toolbar-actions select:disabled,
+.toolbar-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.toolbar-actions input {
+  min-width: 180px;
 }
 
 .graph-container {
   width: 100%;
-  height: min(72vh, 760px);
+  height: min(74vh, 800px);
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid rgba(111, 138, 246, 0.28);
   background: #07122e;
 }
 
+.node-mini-popover {
+  width: 290px;
+  max-width: 42vw;
+  border-radius: 10px;
+  border: 1px solid rgba(178, 198, 255, 0.5);
+  background: rgba(7, 16, 44, 0.94);
+  color: #edf2ff;
+  padding: 0.52rem 0.64rem;
+  box-shadow: 0 10px 24px rgba(3, 8, 26, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  backdrop-filter: blur(8px);
+}
+
+.node-mini-popover strong {
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.node-mini-popover span {
+  color: #bfd0ff;
+  font-size: 0.74rem;
+  line-height: 1.2;
+}
+
+.node-mini-popover p {
+  margin: 0.2rem 0 0;
+  color: #d7e3ff;
+  font-size: 0.76rem;
+  line-height: 1.32;
+}
+
 @media (max-width: 900px) {
   .graph-container {
-    height: 64vh;
+    height: 66vh;
   }
 }

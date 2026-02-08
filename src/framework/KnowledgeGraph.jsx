@@ -8,13 +8,16 @@ import {
   useState,
 } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { Html, OrbitControls, Sparkles } from '@react-three/drei'
+import { OrbitControls, Sparkles } from '@react-three/drei'
 import * as THREE from 'three'
 import R3fForceGraph from 'r3f-forcegraph'
 import { DEFAULT_QUALITY_MODE, QUALITY_PRESETS } from './qualityPresets'
 
 const VIEWPORT_PADDING = 48
 const TEAM_PALETTE = ['#58b6ff', '#ff8a3d', '#59d19a', '#c4a2ff', '#ffd166', '#ff6e9f', '#40e1d0']
+const EMPTY_ARRAY = []
+const EMPTY_OBJECT = {}
+const DEFAULT_INITIAL_FOCUS = { type: 'all' }
 
 function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2
@@ -130,14 +133,13 @@ function GraphLayer({
   quality,
   onNodeClick,
   onNodeHover,
-  hoverTooltip,
-  tooltipRenderer,
+  detailTrigger,
+  onDetailNodeChange,
   dimInactive,
-  teamKey,
-  documentKey,
 }) {
   const fgRef = useRef(null)
   const animationRef = useRef(null)
+  const lastHoverIdRef = useRef(null)
   const { camera, size } = useThree()
   const viewportWidth = size.width
   const viewportHeight = size.height
@@ -145,6 +147,11 @@ function GraphLayer({
   const [highlightNodes, setHighlightNodes] = useState(new Set())
   const [highlightLinks, setHighlightLinks] = useState(new Set())
   const activeNodeIdSet = useMemo(() => new Set(activeNodeIds), [activeNodeIds])
+  const isDense = graphData.nodes.length > 180
+  const effectiveCooldownTicks = isDense ? Math.min(quality.cooldownTicks, 22) : quality.cooldownTicks
+  const effectiveCooldownTime = isDense ? Math.min(quality.cooldownTime, 4000) : quality.cooldownTime
+  const effectiveParticleIdle = isDense ? 0 : quality.directionalParticlesIdle
+  const effectiveParticleHighlight = isDense ? 1 : quality.directionalParticlesHighlight
 
   useFrame(() => {
     fgRef.current?.tickFrame()
@@ -186,7 +193,7 @@ function GraphLayer({
       (link) => quality.linkDistanceBase + (link.strength ?? 1) * quality.linkDistanceScale,
     )
     forceGraph.d3ReheatSimulation()
-  }, [quality])
+  }, [quality, isDense])
 
   useEffect(() => {
     if (!focusRequest?.nodeIds?.length || !fgRef.current) return
@@ -294,6 +301,10 @@ function GraphLayer({
   }, [camera, controlsRef, focusRequest, graphData, viewportWidth, viewportHeight])
 
   const handleNodeHover = (node) => {
+    const hoverId = node?.id ?? null
+    if (lastHoverIdRef.current === hoverId) return
+    lastHoverIdRef.current = hoverId
+
     const nextNodes = new Set()
     const nextLinks = new Set()
 
@@ -307,19 +318,17 @@ function GraphLayer({
     setHighlightNodes(nextNodes)
     setHighlightLinks(nextLinks)
     onNodeHover?.(node)
+    if (detailTrigger === 'hover') {
+      onDetailNodeChange?.(node ?? null)
+    }
   }
 
   const handleNodeClick = (node, event) => {
     onNodeClick?.(node, event)
+    if (detailTrigger === 'click') {
+      onDetailNodeChange?.(node ?? null)
+    }
   }
-
-  const showHoverPopover =
-    hoverTooltip &&
-    hoverNode &&
-    Number.isFinite(hoverNode.x) &&
-    Number.isFinite(hoverNode.y) &&
-    Number.isFinite(hoverNode.z) &&
-    (activeNodeIdSet.size === 0 || activeNodeIdSet.has(hoverNode.id))
 
   const hideInactive = quality.hideInactive && activeNodeIdSet.size > 0
 
@@ -328,10 +337,13 @@ function GraphLayer({
       <R3fForceGraph
         ref={fgRef}
         graphData={graphData}
+        enablePointerInteraction
         nodeResolution={quality.nodeResolution}
         linkResolution={quality.linkResolution}
-        cooldownTicks={quality.cooldownTicks}
-        cooldownTime={quality.cooldownTime}
+        cooldownTicks={effectiveCooldownTicks}
+        cooldownTime={effectiveCooldownTime}
+        d3VelocityDecay={isDense ? 0.62 : 0.48}
+        d3AlphaDecay={isDense ? 0.09 : 0.045}
         nodeVal={(node) => node.val}
         nodeVisibility={(node) => !hideInactive || activeNodeIdSet.has(node.id)}
         nodeColor={(node) => {
@@ -374,8 +386,8 @@ function GraphLayer({
         linkOpacity={activeNodeIdSet.size > 0 ? 0.55 : 0.62}
         linkDirectionalParticles={(link) =>
           highlightLinks.has(link)
-            ? quality.directionalParticlesHighlight
-            : quality.directionalParticlesIdle
+            ? effectiveParticleHighlight
+            : effectiveParticleIdle
         }
         linkDirectionalParticleSpeed={0.008}
         linkDirectionalParticleWidth={2}
@@ -385,47 +397,6 @@ function GraphLayer({
         onNodeHover={handleNodeHover}
         onNodeClick={handleNodeClick}
       />
-      {showHoverPopover && (
-        <Html
-          position={[
-            hoverNode.x,
-            hoverNode.y + Math.max(8, Math.cbrt(Math.max(hoverNode.val ?? 1, 1)) * 5),
-            hoverNode.z,
-          ]}
-          center
-          distanceFactor={8}
-          style={{ pointerEvents: 'none' }}
-        >
-          {tooltipRenderer ? (
-            tooltipRenderer(hoverNode)
-          ) : (
-            <div
-              style={{
-                minWidth: '140px',
-                borderRadius: '10px',
-                border: '1px solid rgba(178, 198, 255, 0.48)',
-                background: 'rgba(7, 16, 44, 0.9)',
-                color: '#edf2ff',
-                padding: '0.36rem 0.5rem',
-                boxShadow: '0 10px 24px rgba(3, 8, 26, 0.5)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.08rem',
-                backdropFilter: 'blur(8px)',
-                fontFamily: 'sans-serif',
-              }}
-            >
-              <strong style={{ fontSize: '0.74rem', lineHeight: 1.15 }}>{hoverNode.label}</strong>
-              <span style={{ color: '#bfd0ff', fontSize: '0.64rem', lineHeight: 1.1 }}>
-                {hoverNode.category}
-              </span>
-              <span style={{ color: '#9db0e9', fontSize: '0.61rem', lineHeight: 1.1 }}>
-                {hoverNode[teamKey] ?? 'no-team'} · {hoverNode[documentKey] ?? 'no-doc'}
-              </span>
-            </div>
-          )}
-        </Html>
-      )}
     </>
   )
 }
@@ -439,13 +410,11 @@ function GraphScene({
   camera,
   background,
   fog,
-  hoverTooltip,
-  tooltipRenderer,
+  detailTrigger,
+  onDetailNodeChange,
   dimInactive,
   onNodeClick,
   onNodeHover,
-  teamKey,
-  documentKey,
 }) {
   const controlsRef = useRef(null)
 
@@ -482,11 +451,9 @@ function GraphScene({
         quality={quality}
         onNodeClick={onNodeClick}
         onNodeHover={onNodeHover}
-        hoverTooltip={hoverTooltip}
-        tooltipRenderer={tooltipRenderer}
+        detailTrigger={detailTrigger}
+        onDetailNodeChange={onDetailNodeChange}
         dimInactive={dimInactive}
-        teamKey={teamKey}
-        documentKey={documentKey}
       />
       <SceneTelemetry controlsRef={controlsRef} viewStateRef={viewStateRef} />
       <OrbitControls
@@ -571,27 +538,56 @@ function scopeData(rawData, teamScope, hiddenTeamIds, showCrossTeamLinks, teamKe
   return { nodes, links }
 }
 
+function scopeDataByUser(rawData, userScope, hiddenUserIds, userKey) {
+  const hidden = new Set(hiddenUserIds ?? [])
+  const scopedUsers = userScope ? new Set(userScope) : null
+
+  const nodes = (rawData?.nodes ?? []).filter((node) => {
+    const userId = node[userKey]
+    if (hidden.has(userId)) return false
+    if (!scopedUsers) return true
+    return scopedUsers.has(userId)
+  })
+
+  const nodeIdSet = new Set(nodes.map((node) => node.id))
+  const links = (rawData?.links ?? []).filter((link) => {
+    const sourceId = link.source?.id ?? link.source
+    const targetId = link.target?.id ?? link.target
+    return nodeIdSet.has(sourceId) && nodeIdSet.has(targetId)
+  })
+
+  return { nodes, links }
+}
+
 export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
   {
     data,
-    groups = [],
+    groups = EMPTY_ARRAY,
     teamKey = 'teamId',
     documentKey = 'documentId',
-    teamColors = {},
+    userKey = 'uploadedByUserId',
+    userDisplayNameKey = 'uploadedByName',
+    userProfiles = EMPTY_OBJECT,
+    teamColors = EMPTY_OBJECT,
     initialTeamScope = null,
-    hiddenTeamIds = [],
+    initialUserScope = null,
+    hiddenTeamIds = EMPTY_ARRAY,
+    hiddenUserIds = EMPTY_ARRAY,
     showCrossTeamLinks = true,
     className,
     style,
     qualityMode = DEFAULT_QUALITY_MODE,
     background = '#07122e',
     fog = { near: 280, far: 1800 },
-    camera = {},
+    camera = EMPTY_OBJECT,
     autoFocusOnNodeClick = true,
     dimInactive = true,
-    hoverTooltip = true,
-    tooltipRenderer,
-    initialFocus = { type: 'all' },
+    detailTrigger = 'click',
+    showDetailPanel = true,
+    detailPanelPlacement = 'middle-right',
+    detailPanelOffset = EMPTY_OBJECT,
+    detailRenderer,
+    initialFocus = DEFAULT_INITIAL_FOCUS,
     onNodeClick,
     onNodeHover,
     onFocusChange,
@@ -602,6 +598,7 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
   const viewStateRef = useRef(null)
   const groupsById = useMemo(() => new Map(groups.map((group) => [group.id, group])), [groups])
   const [teamScope, setTeamScope] = useState(initialTeamScope)
+  const [userScope, setUserScope] = useState(initialUserScope)
 
   useEffect(() => {
     setRawData(data)
@@ -611,9 +608,18 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
     setTeamScope(initialTeamScope)
   }, [initialTeamScope])
 
-  const filteredData = useMemo(
+  useEffect(() => {
+    setUserScope(initialUserScope)
+  }, [initialUserScope])
+
+  const teamScopedData = useMemo(
     () => scopeData(rawData, teamScope, hiddenTeamIds, showCrossTeamLinks, teamKey),
     [rawData, teamScope, hiddenTeamIds, showCrossTeamLinks, teamKey],
+  )
+
+  const filteredData = useMemo(
+    () => scopeDataByUser(teamScopedData, userScope, hiddenUserIds, userKey),
+    [teamScopedData, userScope, hiddenUserIds, userKey],
   )
 
   const teamColorMap = useMemo(
@@ -626,12 +632,19 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
     normalized.nodes.forEach((node) => {
       const teamId = node[teamKey]
       node.__displayColor = node.color ?? teamColorMap.get(teamId) ?? '#8ad4ff'
+      node.__uploaderName =
+        node[userDisplayNameKey] ??
+        userProfiles?.[node[userKey]]?.name ??
+        userProfiles?.[node[userKey]]?.displayName ??
+        node[userKey] ??
+        'unknown-user'
     })
     return normalized
-  }, [filteredData, teamKey, teamColorMap])
+  }, [filteredData, teamKey, teamColorMap, userDisplayNameKey, userProfiles, userKey])
 
   const [qualityState, setQualityState] = useState(qualityMode)
   const [activeNodeIds, setActiveNodeIds] = useState([])
+  const [detailNode, setDetailNode] = useState(null)
   const [focusRequest, setFocusRequest] = useState({
     nodeIds: graphData.nodes.map((node) => node.id),
     kind: 'default',
@@ -693,7 +706,15 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
     }
 
     focusAll()
-  }, [focusAll, focusGroup, focusOnNodes, initialFocus, graphData.nodes.length])
+  }, [
+    focusAll,
+    focusGroup,
+    focusOnNodes,
+    initialFocus.groupId,
+    initialFocus.type,
+    initialFocus.nodeIds,
+    graphData.nodes.length,
+  ])
 
   const focusTeam = useCallback(
     (teamId) => {
@@ -717,6 +738,18 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
     [focusOnNodes, graphData.nodes, documentKey],
   )
 
+  const focusUser = useCallback(
+    (userId) => {
+      const ids = graphData.nodes
+        .filter((node) => String(node[userKey]) === String(userId))
+        .map((node) => node.id)
+      if (!ids.length) return false
+      focusOnNodes(ids, 'area')
+      return true
+    },
+    [focusOnNodes, graphData.nodes, userKey],
+  )
+
   const search = useCallback(
     (query, { limit = 25, focus = false } = {}) => {
       const normalized = String(query ?? '').trim().toLowerCase()
@@ -728,6 +761,8 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
           node.summary,
           node[teamKey],
           node[documentKey],
+          node[userKey],
+          node.__uploaderName,
           ...(node.tags ?? []),
         ]
           .filter(Boolean)
@@ -741,7 +776,7 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
       }
       return sliced
     },
-    [documentKey, focusOnNodes, graphData.nodes, teamKey],
+    [documentKey, focusOnNodes, graphData.nodes, teamKey, userKey],
   )
 
   useImperativeHandle(
@@ -752,6 +787,7 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
       focusGroup,
       focusTeam,
       focusDocument,
+      focusUser,
       search,
       setTeamScope: (teamIds, { focus = true } = {}) => {
         setTeamScope(teamIds?.length ? [...new Set(teamIds)] : null)
@@ -764,6 +800,19 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
       },
       clearTeamScope: ({ focus = true } = {}) => {
         setTeamScope(null)
+        if (focus) focusAll()
+      },
+      setUserScope: (userIds, { focus = true } = {}) => {
+        setUserScope(userIds?.length ? [...new Set(userIds)] : null)
+        if (focus && userIds?.length) {
+          const ids = graphData.nodes
+            .filter((node) => userIds.includes(node[userKey]))
+            .map((node) => node.id)
+          if (ids.length) focusOnNodes(ids, 'area')
+        }
+      },
+      clearUserScope: ({ focus = true } = {}) => {
+        setUserScope(null)
         if (focus) focusAll()
       },
       upsertData: (patch) => {
@@ -781,6 +830,7 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
         return {
           quality: qualityState,
           teamScope,
+          userScope,
           activeNodeIds,
           focusNodeIds: focusRequest.nodeIds,
           view,
@@ -789,6 +839,7 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
       listTeams: () => [...new Set(graphData.nodes.map((node) => node[teamKey]).filter(Boolean))],
       listDocuments: () =>
         [...new Set(graphData.nodes.map((node) => node[documentKey]).filter(Boolean))],
+      listUsers: () => [...new Set(graphData.nodes.map((node) => node[userKey]).filter(Boolean))],
     }),
     [
       activeNodeIds,
@@ -799,11 +850,14 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
       focusOnNodes,
       focusRequest.nodeIds,
       focusTeam,
+      focusUser,
       graphData.nodes,
       qualityState,
       search,
       teamKey,
       teamScope,
+      userKey,
+      userScope,
     ],
   )
 
@@ -818,6 +872,61 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
     [autoFocusOnNodeClick, onNodeClick, focusOnNodes],
   )
 
+  const detailPanelPositionStyle = useMemo(() => {
+    const offsetX = detailPanelOffset?.x ?? 0
+    const offsetY = detailPanelOffset?.y ?? 0
+
+    switch (detailPanelPlacement) {
+      case 'top-right':
+        return { right: `${20 + offsetX}px`, top: `${20 + offsetY}px` }
+      case 'bottom-right':
+        return { right: `${20 + offsetX}px`, bottom: `${20 + offsetY}px` }
+      case 'middle-right':
+      default:
+        return {
+          right: `${20 + offsetX}px`,
+          top: `calc(50% + ${offsetY}px)`,
+          transform: 'translateY(-50%)',
+        }
+    }
+  }, [detailPanelOffset, detailPanelPlacement])
+
+  const defaultDetailPanel = useCallback(
+    (node) => (
+      <div
+        style={{
+          width: '290px',
+          maxWidth: '42vw',
+          borderRadius: '10px',
+          border: '1px solid rgba(178, 198, 255, 0.5)',
+          background: 'rgba(7, 16, 44, 0.94)',
+          color: '#edf2ff',
+          padding: '0.52rem 0.64rem',
+          boxShadow: '0 10px 24px rgba(3, 8, 26, 0.5)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.2rem',
+          backdropFilter: 'blur(8px)',
+        }}
+      >
+        <strong style={{ fontSize: '0.9rem', lineHeight: 1.2 }}>{node.label}</strong>
+        <span style={{ color: '#bfd0ff', fontSize: '0.74rem', lineHeight: 1.2 }}>
+          {node[teamKey] ?? 'no-team'} · {node[documentKey] ?? 'no-doc'}
+        </span>
+        <span style={{ color: '#bdd6ff', fontSize: '0.72rem', lineHeight: 1.2 }}>
+          uploaded by {node.__uploaderName}
+        </span>
+        <span style={{ color: '#9db0e9', fontSize: '0.71rem', lineHeight: 1.2 }}>
+          {node.category ?? 'Uncategorized'}
+        </span>
+        <p style={{ margin: 0, color: '#d7e3ff', fontSize: '0.76rem', lineHeight: 1.32 }}>
+          {node.summary ?? 'No summary available.'}
+        </p>
+      </div>
+    ),
+    [documentKey, teamKey],
+  )
+
   return (
     <div className={className} style={{ width: '100%', height: '100%', position: 'relative', ...style }}>
       <GraphScene
@@ -829,14 +938,17 @@ export const KnowledgeGraph = forwardRef(function KnowledgeGraph(
         camera={camera}
         background={background}
         fog={fog}
-        hoverTooltip={hoverTooltip}
-        tooltipRenderer={tooltipRenderer}
+        detailTrigger={detailTrigger}
+        onDetailNodeChange={setDetailNode}
         dimInactive={dimInactive}
         onNodeClick={handleNodeClick}
         onNodeHover={onNodeHover}
-        teamKey={teamKey}
-        documentKey={documentKey}
       />
+      {showDetailPanel && detailNode && (
+        <div style={{ position: 'absolute', zIndex: 30, pointerEvents: 'none', ...detailPanelPositionStyle }}>
+          {detailRenderer ? detailRenderer(detailNode) : defaultDetailPanel(detailNode)}
+        </div>
+      )}
     </div>
   )
 })

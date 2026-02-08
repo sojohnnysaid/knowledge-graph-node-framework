@@ -2,15 +2,16 @@
 
 Embeddable React framework for rendering and organizing 3D knowledge graphs inside any bounded UI region.
 
-Built for product scenarios like AI course-generation SaaS with multi-team document ingestion and RAG-backed knowledge mapping.
+Designed for SaaS products with multi-team document ingestion (RAG), uploader attribution, and interactive knowledge exploration.
 
 ## What It Solves
 
-- Render a navigable knowledge graph in a card/panel (not full window required)
-- Handle multi-team knowledge nodes in one graph
-- Focus by team, document, or arbitrary node set
-- Support incremental ingestion updates without rebuilding the app
-- Keep performance tunable with runtime quality presets
+- Render a navigable graph in a dashboard card/panel (not full window required)
+- Model tenant/team/document/user attribution on nodes
+- Focus by team, user, document, group, or arbitrary node set
+- Support incremental ingestion updates (`upsertData`) without remounts
+- Provide stable click-driven detail panels (2D overlay, configurable placement)
+- Tune runtime quality (`high`, `balanced`, `performance`)
 
 ## Install
 
@@ -24,7 +25,7 @@ npm install knowledge-graph-node-framework react react-dom three @react-three/fi
 import { useRef } from 'react'
 import { KnowledgeGraph } from 'knowledge-graph-node-framework'
 
-export default function KnowledgePanel({ graphData, groups }) {
+export default function KnowledgePanel({ graphData, groups, userProfiles }) {
   const graphRef = useRef(null)
 
   return (
@@ -33,7 +34,14 @@ export default function KnowledgePanel({ graphData, groups }) {
         ref={graphRef}
         data={graphData}
         groups={groups}
+        teamKey="teamId"
+        documentKey="documentId"
+        userKey="uploadedByUserId"
+        userDisplayNameKey="uploadedByName"
+        userProfiles={userProfiles}
         qualityMode="balanced"
+        detailTrigger="click"
+        detailPanelPlacement="middle-right"
         initialFocus={{ type: 'all' }}
       />
     </div>
@@ -54,14 +62,13 @@ Node fields (recommended):
 - `summary?: string`
 - `teamId?: string` (or custom key via `teamKey`)
 - `documentId?: string` (or custom key via `documentKey`)
+- `uploadedByUserId?: string` (or custom key via `userKey`)
+- `uploadedByName?: string` (or custom key via `userDisplayNameKey`)
 
-Link fields (required):
+Link fields:
 
-- `source: string`
-- `target: string`
-
-Optional link fields:
-
+- `source: string` (required)
+- `target: string` (required)
 - `strength?: number`
 - `relation?: string`
 - `color?: string`
@@ -70,19 +77,27 @@ Optional link fields:
 
 - `data`: `{ nodes: Node[], links: Link[] }` (required)
 - `groups`: `{ id: string, nodeIds: string[] }[]`
-- `teamKey`: node field name for team ID (default `teamId`)
-- `documentKey`: node field name for document ID (default `documentId`)
-- `teamColors`: map of teamId -> color
+- `teamKey`: node field for team id (default `teamId`)
+- `documentKey`: node field for document id (default `documentId`)
+- `userKey`: node field for uploader user id (default `uploadedByUserId`)
+- `userDisplayNameKey`: node field for uploader display name (default `uploadedByName`)
+- `userProfiles`: `{ [userId]: { name?: string, displayName?: string, teamId?: string } }`
+- `teamColors`: `{ [teamId]: color }`
 - `initialTeamScope`: `string[] | null`
+- `initialUserScope`: `string[] | null`
 - `hiddenTeamIds`: `string[]`
+- `hiddenUserIds`: `string[]`
 - `showCrossTeamLinks`: `boolean` (default `true`)
 - `qualityMode`: `'high' | 'balanced' | 'performance'`
 - `initialFocus`: `{ type: 'all' } | { type: 'group', groupId } | { type: 'nodes', nodeIds }`
 - `autoFocusOnNodeClick`: `boolean` (default `true`)
 - `dimInactive`: `boolean` (default `true`)
-- `hoverTooltip`: `boolean` (default `true`)
-- `tooltipRenderer(node)`: custom tooltip renderer
-- `background`: string (default `#07122e`)
+- `detailTrigger`: `'click' | 'hover'` (default `click`)
+- `showDetailPanel`: `boolean` (default `true`)
+- `detailPanelPlacement`: `'top-right' | 'middle-right' | 'bottom-right'`
+- `detailPanelOffset`: `{ x?: number, y?: number }`
+- `detailRenderer(node)`: custom detail panel renderer
+- `background`: color (default `#07122e`)
 - `fog`: `{ near: number, far: number } | false`
 - `camera`: `{ position, fov, near, far, minDistance, maxDistance }`
 - `onNodeClick(node, event)`
@@ -96,50 +111,57 @@ Optional link fields:
 - `focusNodes(nodeIds: string[])`
 - `focusGroup(groupId: string)`
 - `focusTeam(teamId: string)`
+- `focusUser(userId: string)`
 - `focusDocument(documentId: string)`
 - `search(query: string, { limit = 25, focus = false })`
 - `setTeamScope(teamIds: string[], { focus = true })`
 - `clearTeamScope({ focus = true })`
+- `setUserScope(userIds: string[], { focus = true })`
+- `clearUserScope({ focus = true })`
 - `setQuality(mode: 'high' | 'balanced' | 'performance')`
 - `upsertData({ nodes?: Node[], links?: Link[] })`
 - `listTeams()`
+- `listUsers()`
 - `listDocuments()`
 - `getSnapshot()`
 
-## SaaS Workflow Example (Teams + RAG)
+## SaaS Workflow Example (Team + User Attribution)
 
 ```jsx
-// During ingestion completion (streaming patch):
+// Ingestion patch with uploader attribution:
 graphRef.current.upsertData({
   nodes: [
     {
       id: 'chunk-8844',
-      label: 'Gagne Nine Events Summary',
+      label: 'Assessment Blueprint',
       teamId: 'team-instructional-design',
       documentId: 'doc-lxd-playbook',
-      tags: ['instructional design', 'pedagogy'],
+      uploadedByUserId: 'user-avery',
+      uploadedByName: 'Avery Chen',
+      tags: ['assessment', 'rubric'],
       val: 6,
     },
   ],
-  links: [
-    { source: 'chunk-8844', target: 'chunk-1011', relation: 'semantic-match', strength: 2 },
-  ],
+  links: [{ source: 'chunk-8844', target: 'chunk-1011', relation: 'semantic-match', strength: 2 }],
 })
 
-// Filter graph to one team:
+// Scope graph to one team:
 graphRef.current.setTeamScope(['team-instructional-design'])
 
-// Focus all nodes from a selected source document:
-graphRef.current.focusDocument('doc-lxd-playbook')
+// Scope to one uploader (user -> team -> docs):
+graphRef.current.setUserScope(['user-avery'])
 
-// Search and focus matches:
-const matches = graphRef.current.search('assessment rubric', { focus: true, limit: 30 })
+// Focus uploader contributions:
+graphRef.current.focusUser('user-avery')
+
+// Focus selected source document:
+graphRef.current.focusDocument('doc-lxd-playbook')
 ```
 
 ## Quality Presets
 
 - `high`: richest visuals
-- `balanced`: good default for most apps
+- `balanced`: good default
 - `performance`: lowest compute, strongest culling
 
 ## Development
@@ -151,4 +173,4 @@ npm run lint
 npm run build
 ```
 
-The demo in `src/App.jsx` shows an embedded graph with external controls, intended as integration reference.
+The local demo in `src/App.jsx` shows team workspace/global map behavior, user attribution, document focus, and simulated ingestion patches.
